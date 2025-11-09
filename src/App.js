@@ -1,7 +1,6 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useRef } from "react";
 import "./App.css";
 
-// Helper: search wikipedia for pages matching the query
 async function wikipediaSearch(query, limit = 10) {
   const url = new URL("https://en.wikipedia.org/w/api.php");
   url.searchParams.set("action", "query");
@@ -16,7 +15,6 @@ async function wikipediaSearch(query, limit = 10) {
   return data.query?.search ?? [];
 }
 
-// Helper: get files linked from a wikipedia page by pageid
 async function getFilesFromPage(pageid) {
   const url = new URL("https://en.wikipedia.org/w/api.php");
   url.searchParams.set("action", "query");
@@ -33,7 +31,6 @@ async function getFilesFromPage(pageid) {
   return first.images ?? [];
 }
 
-// Helper: resolve a File: title to a direct file URL
 async function resolveFileUrl(fileTitle) {
   async function fetchFile(site) {
     const url = new URL(`https://${site}/w/api.php`);
@@ -64,58 +61,16 @@ export default function App() {
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState([]);
-  const [featured, setFeatured] = useState([]);
   const [currentAudio, setCurrentAudio] = useState(null);
-  const [showHome, setShowHome] = useState(true);
   const audioRef = useRef(null);
-
-  const trendingPages = [
-    "Viva la Vida",
-    "Bohemian Rhapsody",
-    "Yesterday (Beatles song)",
-    "Imagine (John Lennon song)",
-    "Billie Jean",
-    "Hotel California",
-    "Smells Like Teen Spirit",
-    "Like a Rolling Stone"
-  ];
-
-  useEffect(() => {
-    loadTrendingSongs();
-  }, []);
-
-  async function loadTrendingSongs() {
-    setLoading(true);
-    const items = [];
-    for (const title of trendingPages) {
-      try {
-        const hits = await wikipediaSearch(title, 1);
-        if (hits[0]) {
-          const imgs = await getFilesFromPage(hits[0].pageid);
-          const audioFiles = [];
-          for (const f of imgs.filter(img => isAudioFile(img.title))) {
-            const resolved = await resolveFileUrl(f.title);
-            if (resolved?.url && resolved?.mime?.includes('audio')) {
-              audioFiles.push({ title: f.title, url: resolved.url });
-              break;
-            }
-          }
-          if (audioFiles.length > 0) {
-            items.push({ title: hits[0].title, audioFiles });
-          }
-        }
-      } catch (e) {}
-    }
-    setFeatured(items);
-    setLoading(false);
-  }
 
   async function handleSearch(e) {
     e?.preventDefault();
     if (!query.trim()) return;
+    
     setLoading(true);
-    setShowHome(false);
     setResults([]);
+    
     try {
       const hits = await wikipediaSearch(query, 12);
       const pages = await Promise.all(
@@ -123,26 +78,44 @@ export default function App() {
           try {
             const imgs = await getFilesFromPage(h.pageid);
             const files = imgs.filter((f) => isAudioFile(f.title));
-            const audioFiles = await Promise.all(
-              files.map(async (f) => {
-                try {
-                  const resolved = await resolveFileUrl(f.title);
-                  if (resolved?.url && /^audio\//.test(resolved.mime)) {
-                    return { title: f.title, url: resolved.url, mime: resolved.mime };
-                  }
-                } catch (err) {}
-                return null;
-              })
-            );
-            return { pageid: h.pageid, title: h.title, snippet: h.snippet, audioFiles: audioFiles.filter(Boolean) };
+            const audioFiles = [];
+            
+            for (const f of files.slice(0, 3)) {
+              try {
+                const resolved = await resolveFileUrl(f.title);
+                if (resolved?.url && resolved?.mime?.includes('audio')) {
+                  audioFiles.push({ title: f.title, url: resolved.url, mime: resolved.mime });
+                }
+              } catch (err) {
+                console.error('Error resolving file:', err);
+              }
+            }
+            
+            return { 
+              pageid: h.pageid, 
+              title: h.title, 
+              snippet: h.snippet, 
+              audioFiles 
+            };
           } catch (err) {
+            console.error('Error processing page:', err);
             return { pageid: h.pageid, title: h.title, snippet: h.snippet, audioFiles: [] };
           }
         })
       );
-      setResults(pages.filter(p => p.audioFiles.length > 0));
-    } catch (err) {}
-    setLoading(false);
+      
+      const withAudio = pages.filter(p => p.audioFiles.length > 0);
+      setResults(withAudio);
+      
+      if (withAudio.length === 0) {
+        alert('No audio files found for this search. Try searching for well-known songs like "Bohemian Rhapsody" or "Imagine John Lennon"');
+      }
+    } catch (err) {
+      console.error('Search error:', err);
+      alert('Search failed: ' + err.message);
+    } finally {
+      setLoading(false);
+    }
   }
 
   function handlePlay(file) {
@@ -159,34 +132,32 @@ export default function App() {
         <div className="search-bar">
           <input
             type="text"
-            placeholder="Search for a song..."
+            placeholder="Search for a song... (e.g. Bohemian Rhapsody)"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && handleSearch()}
           />
-          <button onClick={handleSearch}>Search</button>
+          <button onClick={handleSearch} disabled={loading}>
+            {loading ? 'Searching...' : 'Search'}
+          </button>
         </div>
       </header>
 
-      {loading && <p className="loading">Loading...</p>}
+      {loading && <p className="loading">Searching Wikipedia for audio files...</p>}
 
-      {!loading && showHome && featured.length > 0 && (
+      {!loading && results.length === 0 && !loading && (
         <section>
-          <h2>🎧 Trending Wikipedia Songs</h2>
-          <div className="grid">
-            {featured.map((song, i) => (
-              <div className="song" key={i} onClick={() => handlePlay(song.audioFiles[0])}>
-                <img src="https://upload.wikimedia.org/wikipedia/commons/6/6a/Wikipedia-logo-v2-simple.svg" alt="cover" />
-                <div className="title">{song.title}</div>
-              </div>
-            ))}
-          </div>
+          <h2>🎵 Welcome to Wikipedia Music Library</h2>
+          <p style={{color: '#fff', textAlign: 'center', padding: '20px', fontSize: '1.1em'}}>
+            Search for your favorite songs to find audio files from Wikipedia!<br/>
+            Try: "Bohemian Rhapsody", "Imagine John Lennon", "Hotel California"
+          </p>
         </section>
       )}
 
-      {!loading && !showHome && results.length > 0 && (
+      {!loading && results.length > 0 && (
         <section>
-          <h2>🔍 Search Results</h2>
+          <h2>🔍 Search Results ({results.length} pages with audio)</h2>
           <div className="results-list">
             {results.map((r) => (
               <article key={r.pageid} className="result-card">
