@@ -97,3 +97,58 @@ section {
   font-size: 1.2em;
   margin: 20px;
 }
+
+.results-list {
+  max-width: 800px;
+  margin: 0 auto;
+  padding: 20px;
+}
+
+.result-card {
+  background: #1c1c1e;
+  border-radius: 12px;
+  padding: 20px;
+  margin-bottom: 15px;
+}
+
+.result-card h3 {
+  color: #fff;
+  margin: 0 0 15px 0;
+  font-size: 1.2em;
+}
+
+.audio-files {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.audio-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: rgba(255, 255, 255, 0.05);
+  padding: 10px 15px;
+  border-radius: 8px;
+}
+
+.file-name {
+  color: #fff;
+  font-size: 0.9em;
+  flex: 1;
+}
+
+.play-btn {
+  background: #ff2d55;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 8px 16px;
+  font-weight: bold;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.play-btn:hover {
+  background: #ff3b64;
+}
