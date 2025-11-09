@@ -1,6 +1,21 @@
-import React, { useState, useRef } from "react";
-import "./App.css";
+import React, { useState, useEffect, useRef } from "react";
 
+
+// Wikipedia Music Library
+// Single-file React component (default export) you can drop into a React app.
+// Uses the MediaWiki API (wikipedia.org + commons) to search pages, extract File: links
+// and resolve audio file URLs to allow playback directly in the browser.
+// Styling uses Tailwind classes (no imports required if your project already has Tailwind configured).
+
+
+// Notes & limitations:
+// - This frontend-only app queries Wikipedia and Commons APIs with origin=* which is supported by Wikimedia.
+// - Not every Wikipedia article has audio files; many audio assets for songs live on Wikimedia Commons.
+// - Proper productionizing should add caching, server-side rate-limiting, and attribution tracking.
+// - This app attempts to be respectful of Wikimedia's APIs (small page sizes, no heavy crawling in the client).
+
+
+// Helper: search wikipedia for pages matching the query
 async function wikipediaSearch(query, limit = 10) {
   const url = new URL("https://en.wikipedia.org/w/api.php");
   url.searchParams.set("action", "query");
@@ -9,12 +24,17 @@ async function wikipediaSearch(query, limit = 10) {
   url.searchParams.set("srsearch", query);
   url.searchParams.set("srlimit", String(limit));
   url.searchParams.set("origin", "*");
+
+
   const res = await fetch(url.toString());
   if (!res.ok) throw new Error("Search failed");
   const data = await res.json();
   return data.query?.search ?? [];
 }
 
+
+// Helper: get files linked from a wikipedia page by pageid
+// We'll use prop=images to get File: entries and prop=sections if needed
 async function getFilesFromPage(pageid) {
   const url = new URL("https://en.wikipedia.org/w/api.php");
   url.searchParams.set("action", "query");
@@ -23,6 +43,8 @@ async function getFilesFromPage(pageid) {
   url.searchParams.set("format", "json");
   url.searchParams.set("imlimit", "max");
   url.searchParams.set("origin", "*");
+
+
   const res = await fetch(url.toString());
   if (!res.ok) throw new Error("Failed to fetch page images");
   const data = await res.json();
@@ -31,7 +53,11 @@ async function getFilesFromPage(pageid) {
   return first.images ?? [];
 }
 
+
+// Helper: resolve a File: title to a direct file URL via Commons (or en.wikipedia where file is hosted)
+// Supports audio extensions (ogg, oga, mp3, wav, m4a, flac)
 async function resolveFileUrl(fileTitle) {
+  // Helper to query any Wikimedia site (commons or enwiki)
   async function fetchFile(site) {
     const url = new URL(`https://${site}/w/api.php`);
     url.searchParams.set("action", "query");
@@ -48,140 +74,204 @@ async function resolveFileUrl(fileTitle) {
     const info = first.imageinfo?.[0];
     return info ? { url: info.url, mime: info.mime } : null;
   }
+
+
+  // Try Wikimedia Commons first, then fall back to English Wikipedia
   let resolved = await fetchFile("commons.wikimedia.org");
   if (!resolved) resolved = await fetchFile("en.wikipedia.org");
+
+
+  // Still not found? attempt constructing the known pattern manually as a last resort
+  if (!resolved && fileTitle.match(/^File:/i)) {
+    const name = fileTitle.replace(/^File:/i, "").replace(/ /g, "_");
+    resolved = {
+      url: `https://upload.wikimedia.org/wikipedia/en/${name}`,
+      mime: "audio/ogg",
+    };
+  }
+
+
   return resolved;
 }
 
+
+// Utility: filter for audio file names
 function isAudioFile(filename) {
   return /\.(ogg|oga|mp3|wav|m4a|flac)$/i.test(filename);
 }
 
-export default function App() {
+
+export default function WikipediaMusicLibrary() {
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
-  const [results, setResults] = useState([]);
-  const [currentAudio, setCurrentAudio] = useState(null);
+  const [results, setResults] = useState([]); // {pageid, title, snippet, audioFiles: [{title, url, mime}]}[]
+  const [error, setError] = useState(null);
+  const [currentAudio, setCurrentAudio] = useState(null); // {title,url}
   const audioRef = useRef(null);
 
+
+  useEffect(() => {
+    // Auto-play next? We'll keep simple: user clicks play.
+  }, []);
+
+
   async function handleSearch(e) {
-    e?.preventDefault();
+    e && e.preventDefault();
     if (!query.trim()) return;
-    
     setLoading(true);
+    setError(null);
     setResults([]);
-    
+
+
     try {
       const hits = await wikipediaSearch(query, 12);
       const pages = await Promise.all(
         hits.map(async (h) => {
+          // for each hit, get files
           try {
             const imgs = await getFilesFromPage(h.pageid);
-            const files = imgs.filter((f) => isAudioFile(f.title));
-            const audioFiles = [];
-            
-            for (const f of files.slice(0, 3)) {
-              try {
-                const resolved = await resolveFileUrl(f.title);
-                if (resolved?.url && resolved?.mime?.includes('audio')) {
-                  audioFiles.push({ title: f.title, url: resolved.url, mime: resolved.mime });
+            // filter audio files
+            const files = (imgs || []).filter((f) => isAudioFile(f.title || f.name || ""));
+            // resolve URLs for audio files
+            const audioFiles = await Promise.all(
+              files.map(async (f) => {
+                try {
+                  const resolved = await resolveFileUrl(f.title);
+                  if (resolved && resolved.mime && resolved.url) {
+                    // verify mime is audio
+                    if (/^audio\//.test(resolved.mime)) return { title: f.title, url: resolved.url, mime: resolved.mime };
+                    // sometimes mime can be application/ogg etc - still include when extension matches
+                    if (isAudioFile(resolved.url)) return { title: f.title, url: resolved.url, mime: resolved.mime };
+                  }
+                } catch (err) {
+                  // ignore single-file failures
                 }
-              } catch (err) {
-                console.error('Error resolving file:', err);
-              }
-            }
-            
-            return { 
-              pageid: h.pageid, 
-              title: h.title, 
-              snippet: h.snippet, 
-              audioFiles 
-            };
+                return null;
+              })
+            );
+
+
+            return { pageid: h.pageid, title: h.title, snippet: h.snippet, audioFiles: audioFiles.filter(Boolean) };
           } catch (err) {
-            console.error('Error processing page:', err);
             return { pageid: h.pageid, title: h.title, snippet: h.snippet, audioFiles: [] };
           }
         })
       );
-      
-      const withAudio = pages.filter(p => p.audioFiles.length > 0);
-      setResults(withAudio);
-      
-      if (withAudio.length === 0) {
-        alert('No audio files found for this search. Try searching for well-known songs like "Bohemian Rhapsody" or "Imagine John Lennon"');
-      }
+
+
+      // Filter results to those with audioFiles or still show top textual matches
+      setResults(pages);
     } catch (err) {
-      console.error('Search error:', err);
-      alert('Search failed: ' + err.message);
+      setError(err.message || "Unknown error");
     } finally {
       setLoading(false);
     }
   }
 
+
   function handlePlay(file) {
     setCurrentAudio(file);
+    // after state update, ensure audio element plays
     setTimeout(() => {
-      audioRef.current?.play();
+      try {
+        audioRef.current && audioRef.current.play();
+      } catch (e) {}
     }, 100);
   }
 
+
   return (
-    <div className="App">
-      <header>
-        <h1>Wikipedia Music Library</h1>
-        <div className="search-bar">
+    <div className="min-h-screen bg-gray-50 p-6">
+      <div className="max-w-5xl mx-auto">
+        <header className="mb-6">
+          <h1 className="text-3xl font-extrabold">Wikipedia Music Library</h1>
+          <p className="text-gray-600 mt-1">Search Wikipedia pages for audio files (songs, clips) and play them in-browser. Powered by MediaWiki & Wikimedia Commons.</p>
+        </header>
+
+
+        <form onSubmit={handleSearch} className="flex gap-3 mb-6">
           <input
-            type="text"
-            placeholder="Search for a song... (e.g. Bohemian Rhapsody)"
+            className="flex-1 px-4 py-3 rounded-md border border-gray-300 focus:outline-none focus:ring-2 focus:ring-indigo-300"
+            placeholder="Search for a song title, artist, or Wikipedia page..."
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && handleSearch()}
           />
-          <button onClick={handleSearch} disabled={loading}>
-            {loading ? 'Searching...' : 'Search'}
+          <button
+            type="submit"
+            className="px-4 py-3 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 disabled:opacity-60"
+            disabled={loading}
+          >
+            {loading ? "Searching..." : "Search"}
           </button>
-        </div>
-      </header>
+        </form>
 
-      {loading && <p className="loading">Searching Wikipedia for audio files...</p>}
 
-      {!loading && results.length === 0 && !loading && (
+        {error && <div className="mb-4 text-red-600">Error: {error}</div>}
+
+
         <section>
-          <h2>🎵 Welcome to Wikipedia Music Library</h2>
-          <p style={{color: '#fff', textAlign: 'center', padding: '20px', fontSize: '1.1em'}}>
-            Search for your favorite songs to find audio files from Wikipedia!<br/>
-            Try: "Bohemian Rhapsody", "Imagine John Lennon", "Hotel California"
-          </p>
-        </section>
-      )}
+          {results.length === 0 && !loading && <div className="text-gray-500">No results yet — try searching for a song, artist, or well-known track.</div>}
 
-      {!loading && results.length > 0 && (
-        <section>
-          <h2>🔍 Search Results ({results.length} pages with audio)</h2>
-          <div className="results-list">
+
+          <div className="grid grid-cols-1 gap-4">
             {results.map((r) => (
-              <article key={r.pageid} className="result-card">
-                <h3>{r.title}</h3>
-                <div className="audio-files">
-                  {r.audioFiles.map((f, i) => (
-                    <div key={i} className="audio-item">
-                      <div className="file-name">{f.title.replace(/^File:/i, "")}</div>
-                      <button onClick={() => handlePlay(f)} className="play-btn">▶ Play</button>
+              <article key={r.pageid} className="p-4 bg-white rounded shadow-sm">
+                <h2 className="text-lg font-semibold">{r.title}</h2>
+                <div className="text-sm text-gray-600 mt-1" dangerouslySetInnerHTML={{ __html: r.snippet + "..." }} />
+
+
+                <div className="mt-3">
+                  {r.audioFiles && r.audioFiles.length > 0 ? (
+                    <div className="flex flex-col gap-2">
+                      {r.audioFiles.map((f, i) => (
+                        <div key={i} className="flex items-center gap-3">
+                          <div className="flex-1">
+                            <div className="font-medium">{f.title.replace(/^File:/i, "")}</div>
+                            <div className="text-xs text-gray-500">{f.mime} — Hosted on Commons</div>
+                          </div>
+                          <div className="flex gap-2">
+                            <button
+                              onClick={() => handlePlay(f)}
+                              className="px-3 py-1 rounded border border-gray-300 hover:bg-gray-100"
+                            >
+                              Play
+                            </button>
+                            <a
+                              href={f.url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="px-3 py-1 rounded border border-gray-300 hover:bg-gray-100"
+                            >
+                              Open
+                            </a>
+                          </div>
+                        </div>
+                      ))}
                     </div>
-                  ))}
+                  ) : (
+                    <div className="text-sm text-gray-500">No audio files found on this page.</div>
+                  )}
                 </div>
               </article>
             ))}
           </div>
         </section>
-      )}
 
-      {currentAudio && (
-        <div className="player">
-          <audio ref={audioRef} src={currentAudio.url} controls autoPlay />
-          <span>Now Playing: {currentAudio.title?.replace(/^File:/i, "")}</span>
-        </div>
-      )}
+
+        <footer className="mt-8 p-4 bg-white rounded shadow-sm flex items-center justify-between">
+          <div className="text-sm text-gray-600">Results powered by Wikipedia / Wikimedia Commons. Use responsibly and respect licenses.</div>
+          <div>
+            {currentAudio ? (
+              <div className="flex items-center gap-3">
+                <div className="text-sm">Now playing: <strong>{currentAudio.title.replace(/^File:/i, "")}</strong></div>
+                <audio ref={audioRef} controls src={currentAudio.url} preload="metadata" />
+              </div>
+            ) : (
+              <div className="text-sm text-gray-500">No audio selected</div>
+            )}
+          </div>
+        </footer>
+      </div>
     </div>
   );
 }
